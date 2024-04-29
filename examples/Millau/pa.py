@@ -3,8 +3,8 @@ sys.path.insert(0,"../..")
 
 from mobility.radiation_departments import *
 
-dep =["35"]*
-Age=1
+dep =["19"]
+Age=3
 
 (
     sources_territory,
@@ -12,15 +12,9 @@ Age=1
     costs_territory,
     coordinates,
     raw_flowDT,
-) = get_data_for_model_school(dep)
+) = get_data_for_model_school(dep,1)
 
 
-(
-    sources_territory,
-    sinks_territory,
-    costs_territory,
-    coordinates,
-    raw_flowDT,
-) = get_data_for_model_work_multi(dep)
 
-run_model_for_territory(sources_territory, sinks_territory, costs_territory, coordinates, raw_flowDT)
+flowsRM, flowDT, coordinates_res, plot_sources=run_model_for_territory(sources_territory, sinks_territory, costs_territory, coordinates, raw_flowDT)
+# print (compute_similarity_index(flowsRM, flowDT))
