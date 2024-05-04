@@ -185,6 +185,8 @@ def radiation_model(sources, sinks, costs, alpha=0, beta=1):
 
     source_rest_volume.where(source_rest_volume > eps, 0, inplace=True)
     sink_rest_volume.where(sink_rest_volume > eps, 0, inplace=True)
+    
+    print(matrix_origin_destinations)
 
     return (
         matrix_origin_destinations[["flow_volume"]],

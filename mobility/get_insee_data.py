@@ -23,7 +23,7 @@ def get_insee_data(test=False):
         - the repartion of shops
         - the repartion of schools
         - the repartion of administration facilities
-        - the repartion of sport facilities
+        - the repartion of sport facilitiess5
         - the repartion of care facilities
         - the repartion of show facilities
         - the repartion of museum

@@ -195,186 +195,6 @@ def get_data_for_model_work(
         raw_flowDT,
     )
 
-def get_data_for_model_school(
-    lst_departments,
-    work_home_fluxes_csv=work_home_fluxes_csv,
-    communes_coordinates_csv=COMMUNES_COORDINATES_CSV,
-    communes_surfaces_csv=COMMUNES_SURFACES_CSV,
-    alpha=0,
-    beta=1,
-    test=False,
-):
-    """
-    Gets data for the given departments.
-
-    Uses the get_insee_data function for active population ans jobs
-    Uses local data for communes' superficies, intra-communal distance
-    and work-home mobility
-    (by default, will use the national CSVs in the directory)
-    Todo:
-     * improve the get_insee_data function for work-home data, coordinates
-       and superficies, to not have to deal with local data
-     * compute the internal distance within the code instead of using a CSV
-
-    Parameters
-    ----------
-    lst_departments : list
-        List of departements for which to get the data.
-    work_home_fluxes_csv : string, optional
-        Which CSV to use for work-home data.
-        The default is WORK_HOME_FLUXES_CSV defined at the top of the file.
-    communes_coordinates_csv : string, optional
-        Which CSV to use for coordinates data.
-        The default is COMMUNES_COORDINATES_CSV.
-    communes_surfaces_csv : string, optional
-        Which CSV to use for surfaces data.
-        The default is COMMUNES_SURFACES_CSV.
-    alpha : float, optional
-        The default is 0.
-    beta : float, optional
-        The default is 1.
-
-    Returns sources_territory, sinks_territory, costs_territory,
-            coordinates, raw_flowDT
-            (all of them are pandas dataframes)
-
-    """
-    # ===================
-    # IMPORT AND PROCESS THE DATA
-
-    # Import the data (active population and jobs)
-    insee_data = get_insee_data(test=test)
-    db_actifs = insee_data["active_population"]
-    db_emplois = insee_data["jobs"]
-
-    db_emplois["EMPLT"] = db_emplois[
-        [
-            "n_jobs_CS1",
-            "n_jobs_CS2",
-            "n_jobs_CS3",
-            "n_jobs_CS4",
-            "n_jobs_CS5",
-            "n_jobs_CS6",
-        ]
-    ].sum(axis=1)
-    db_emplois.reset_index(inplace=True)
-
-    db_actifs["ACT"] = db_actifs[
-        [
-            "active_pop_CS1",
-            "active_pop_CS2",
-            "active_pop_CS3",
-            "active_pop_CS4",
-            "active_pop_CS5",
-            "active_pop_CS6",
-        ]
-    ].sum(axis=1)
-    db_actifs.reset_index(inplace=True)
-
-    # Only keep the sinks in the chosen departements
-    sinks_territory = db_emplois.loc[:, ["CODGEO", "EMPLT"]]
-    sinks_territory["DEP"] = sinks_territory["CODGEO"].str.slice(0, 2)
-    mask = sinks_territory["DEP"].apply(lambda x: x in lst_departments)
-    sinks_territory = sinks_territory.loc[mask]
-
-    sinks_territory = sinks_territory.set_index("CODGEO")
-    sinks_territory.rename(columns={"EMPLT": "sink_volume"}, inplace=True)
-    sinks_territory = sinks_territory.drop(columns=["DEP"])
-
-    # Only keep the sinks in the chosen departements
-    sources_territory = db_actifs.loc[:, ["CODGEO", "ACT"]]
-    sources_territory["DEP"] = sources_territory["CODGEO"].str.slice(0, 2)
-    mask = sources_territory["DEP"].apply(lambda x: x in lst_departments)
-    sources_territory = sources_territory.loc[mask]
-
-    sources_territory = sources_territory.set_index("CODGEO")
-    sources_territory = sources_territory.drop(columns=["DEP"])
-    sources_territory.rename(columns={"ACT": "source_volume"}, inplace=True)
-
-    data_folder_path = Path(os.path.dirname(__file__)).joinpath("data").joinpath("insee").joinpath("territories")
-
-    # Import the INSEE data on the work-home mobility on Millau
-    print("data folder path:", data_folder_path, "csv:", work_home_fluxes_csv)
-    file_path = os.path.join(data_folder_path, work_home_fluxes_csv)
-    raw_flowDT = pd.read_csv(
-        file_path,
-        sep=";",
-        usecols=["COMMUNE", "DCLT", "IPONDI", "TRANS"],
-        dtype={"COMMUNE": str, "DCLT": str, "IPONDI": float, "TRANS": int},
-    )
-
-    # Only keep the flows in the given departments
-
-    raw_flowDT["DEP"] = raw_flowDT["COMMUNE"].str.slice(0, 2)
-    raw_flowDT["DEP2"] = raw_flowDT["DCLT"].str.slice(0, 2)
-    mask = raw_flowDT["DEP"].apply(lambda x: x in lst_departments)
-    mask2 = raw_flowDT["DEP2"].apply(lambda x: x in lst_departments)
-    raw_flowDT = raw_flowDT.loc[mask]
-    raw_flowDT = raw_flowDT.loc[mask2]
-
-    # Import the geographic data on the work-home mobility on Millau
-
-    coordinates = pd.read_csv(
-        data_folder_path / communes_coordinates_csv,
-        sep=",",
-        usecols=["NOM_COM", "INSEE_COM", "x", "y"],
-        dtype={"INSEE_COM": str},
-    )
-    coordinates.set_index("INSEE_COM", inplace=True)
-    # The multiplication by 1000 is only for visualization purposes
-    coordinates["x"] = coordinates["x"] * 1000
-    coordinates["y"] = coordinates["y"] * 1000
-
-    surfaces = pd.read_csv(
-        data_folder_path / communes_surfaces_csv,
-        sep=",",
-        usecols=["INSEE_COM", "distance_interne"],
-        dtype={"INSEE_COM": str},
-    )
-    surfaces.set_index("INSEE_COM", inplace=True)
-
-    # Compute the distance between cities
-    #    distance between i and j = (x_i - x_j)**2 + (y_i - y_j)**2
-    lst_communes = sources_territory.index.to_numpy()
-    idx_from_to = np.array(np.meshgrid(lst_communes, lst_communes)).T.reshape(-1, 2)
-    idx_from = idx_from_to[:, 0]
-    idx_to = idx_from_to[:, 1]
-    costs_territory = pd.DataFrame(
-        {"from": idx_from, "to": idx_to, "cost": np.zeros(idx_to.shape[0])}
-    )
-    costs_territory = pd.merge(
-        costs_territory, coordinates, left_on="from", right_index=True
-    )
-    costs_territory.rename(columns={"x": "from_x", "y": "from_y"}, inplace=True)
-    costs_territory = pd.merge(
-        costs_territory, coordinates, left_on="to", right_index=True
-    )
-    costs_territory.rename(columns={"x": "to_x", "y": "to_y"}, inplace=True)
-
-    costs_territory = pd.merge(
-        costs_territory, surfaces, left_on="from", right_index=True
-    )
-
-    costs_territory["cost"] = np.sqrt(
-        (costs_territory["from_x"] / 1000 - costs_territory["to_x"] / 1000) ** 2
-        + (costs_territory["from_y"] / 1000 - costs_territory["to_y"] / 1000) ** 2
-    )
-
-    # distance if the origin and the destination is the same city
-    # is internal distance = 128*r / 45*pi
-    # where r = sqrt(surface of the city)/pi
-    mask = costs_territory["from"] != costs_territory["to"]
-    costs_territory["cost"].where(
-        mask, other=costs_territory["distance_interne"], inplace=True
-    )
-
-    return (
-        sources_territory,
-        sinks_territory,
-        costs_territory,
-        coordinates,
-        raw_flowDT,
-    )
 
 def get_data_for_model_school(
     lst_departments,
@@ -536,6 +356,7 @@ def get_data_for_model_school(
         raw_flowDT,
     )
 
+
 def get_data_for_model_school_multi(
         lst_departments
         ):
@@ -563,7 +384,155 @@ def get_data_for_model_school_multi(
         coordinates,
         raw_flowDT,
     )
+        
+
+def get_data_for_model_school_map(
+    lst_departments,
+    Age,
+    communes_coordinates_csv=COMMUNES_COORDINATES_CSV,
+    communes_surfaces_csv=COMMUNES_SURFACES_CSV,
+    school_home_fluxes_csv=school_home_fluxes_csv,
+    test=False,
+):
+   
+    # ===================
+    # IMPORT AND PROCESS THE DATA
+
+    # Import the data (active population and jobs)
+    insee_data = get_insee_data(test=test)
+    db_students = insee_data["students"]
+    db_schools = insee_data["schools"]
+    db_school_map = insee_data["schools_map"]
     
+    
+    # Prepare sources_territory
+    db_students_ = db_students[db_students['TrancheAge'] == Age].drop(columns=['TrancheAge'])
+    # Only keep the sinks in the chosen departements
+    sources_territory = db_students_.loc[:, ["CODGEO", "Nombre"]]
+    sources_territory["DEP"] = sources_territory["CODGEO"].str.slice(0, 2)
+    mask = sources_territory["DEP"].apply(lambda x: x in lst_departments)
+    sources_territory = sources_territory.loc[mask]
+
+    sources_territory = sources_territory.set_index("CODGEO")
+    sources_territory = sources_territory.drop(columns=["DEP"])
+    sources_territory.rename(columns={"Nombre": "source_volume"}, inplace=True)
+    print("sources_territory1")
+    
+    
+    # Schools
+    db_schools_ = db_schools[db_schools['Type_etablissement'] == Age].drop(columns=['Type_etablissement'])
+
+    # Only keep the sinks in the chosen departements
+    school = db_schools_.loc[:, ["CODGEO", "Code_RNE"]]    
+    mask = school['CODGEO'].str.startswith(tuple(lst_departments))
+    school = school.loc[mask]
+    
+    # School_map
+    school_map = db_school_map.loc[:, ["code_insee", "Code_RNE"]]    
+    mask = school_map['code_insee'].str.startswith(tuple(lst_departments))
+    school_map = school_map.loc[mask]
+
+
+
+    # Prepare sinks_territory
+
+    # Fait un LEFT JOIN sur le code RNE pour récupérer le code commune pour chaque établissement scolaire
+    sinks_territory = pd.merge(school_map, school, how='left', on='Code_RNE')
+    print("sinks_territory1")
+    
+    
+    
+    data_folder_path = Path(os.path.dirname(__file__)).joinpath("data").joinpath("insee").joinpath("territories")    # raw_flowDT = school_home_fluxes_csv
+    raw_flowDT = school_home_fluxes_csv
+
+    raw_flowDT["DEP"] = raw_flowDT["COMMUNE"].str.slice(0, 2)
+    raw_flowDT["DEP2"] = raw_flowDT["DCLT"].str.slice(0, 2)
+    mask = raw_flowDT["DEP"].apply(lambda x: x in lst_departments)
+    mask2 = raw_flowDT["DEP2"].apply(lambda x: x in lst_departments)
+    raw_flowDT = raw_flowDT.loc[mask]
+    raw_flowDT = raw_flowDT.loc[mask2]
+    
+
+    raw_flowDT = raw_flowDT.loc[raw_flowDT['Tranche_Age'] == Age]
+    print("raw_flowDT1")
+
+    # Import the geographic data on the work-home mobility on Millau
+
+    coordinates = pd.read_csv(
+        data_folder_path / communes_coordinates_csv,
+        sep=",",
+        usecols=["NOM_COM", "INSEE_COM", "x", "y"],
+        dtype={"INSEE_COM": str},
+    )
+    coordinates.set_index("INSEE_COM", inplace=True)
+    # The multiplication by 1000 is only for visualization purposes
+    coordinates["x"] = coordinates["x"] * 1000
+    coordinates["y"] = coordinates["y"] * 1000
+
+    surfaces = pd.read_csv(
+        data_folder_path / communes_surfaces_csv,
+        sep=",",
+        usecols=["INSEE_COM", "distance_interne"],
+        dtype={"INSEE_COM": str},
+    )
+    surfaces.set_index("INSEE_COM", inplace=True)
+
+    # Compute the distance between cities
+    #    distance between i and j = (x_i - x_j)**2 + (y_i - y_j)**2
+    lst_communes = sources_territory.index.to_numpy()
+    idx_from_to = np.array(np.meshgrid(lst_communes, lst_communes)).T.reshape(-1, 2)
+    idx_from = idx_from_to[:, 0]
+    idx_to = idx_from_to[:, 1]
+    costs_territory = pd.DataFrame(
+        {"from": idx_from, "to": idx_to, "cost": np.zeros(idx_to.shape[0])}
+    )
+    costs_territory = pd.merge(
+        costs_territory, coordinates, left_on="from", right_index=True
+    )
+    costs_territory.rename(columns={"x": "from_x", "y": "from_y"}, inplace=True)
+    costs_territory = pd.merge(
+        costs_territory, coordinates, left_on="to", right_index=True
+    )
+    costs_territory.rename(columns={"x": "to_x", "y": "to_y"}, inplace=True)
+
+    costs_territory = pd.merge(
+        costs_territory, surfaces, left_on="from", right_index=True
+    )
+
+    costs_territory["cost"] = np.sqrt(
+        (costs_territory["from_x"] / 1000 - costs_territory["to_x"] / 1000) ** 2
+        + (costs_territory["from_y"] / 1000 - costs_territory["to_y"] / 1000) ** 2
+    )
+
+    # distance if the origin and the destination is the same city
+    # is internal distance = 128*r / 45*pi
+    # where r = sqrt(surface of the city)/pi
+    mask = costs_territory["from"] != costs_territory["to"]
+    costs_territory["cost"].where(
+        mask, other=costs_territory["distance_interne"], inplace=True
+    )
+    
+    return (
+        sources_territory,
+        sinks_territory,
+        costs_territory,
+        coordinates,
+        raw_flowDT,
+    )
+    
+
+    
+# dep = ["19"]      
+# (
+#     sources_territory,
+#     sinks_territory,
+#     costs_territory,
+#     coordinates,
+#     raw_flowDT,
+# ) = get_data_for_model_school_map(dep,2) 
+    
+    
+
 
 def run_model_for_territory(
     sources_territory,
@@ -670,6 +639,140 @@ def run_model_for_territory(
                 "(1) Flux domicile-travail générés par le modèle dans l'échantillon"
                 " - alpha = {} - beta = {}"
             ).format(alpha, beta),
+        )
+
+    # PLOT THE FLOWS FROM THE INSEE DATA
+
+    plot_flowDT = raw_flowDT.groupby(["COMMUNE", "DCLT"])["IPONDI"].sum().reset_index()
+    plot_flowDT.rename(
+        columns={"IPONDI": "flow_volume", "COMMUNE": "from", "DCLT": "to"}, inplace=True
+    )
+
+    rm.plot_flow(
+        plot_flowDT,
+        coordinates,
+        sources=plot_sources,
+        n_flows=500,
+        n_locations=20,
+        size=10,
+        title="(2) Flux domicile-travail mesurés par l'INSEE",
+    )
+
+    # EXPORT THE MODEL AND THE INSEE DATA
+
+    flowDT = raw_flowDT.rename(
+        columns={"IPONDI": "flow_volume", "COMMUNE": "from", "DCLT": "to"}
+    )
+    flowDT = flowDT.groupby(["from", "to"])["flow_volume"].sum()
+    flowDT = pd.DataFrame(flowDT)
+
+    flowsRM = pd.DataFrame(total_flows)
+
+    print("Model flow of {} and empirical flow of {}".format(len(flowsRM), len(flowDT)))
+
+    return flowsRM, flowDT, coordinates, plot_sources
+
+
+
+
+def run_model_for_territory_school_map(
+    sources_territory,
+    sinks_territory,
+    costs_territory,
+    coordinates,
+    raw_flowDT,
+    subset=None,
+):
+    """
+    Runs the model and visualises output
+
+    Runs the modal with the given sources, sinks and costs
+    Provides 4 maps:
+        * Volume of active people per commune
+        * Volume of jobs per commune
+        * Flows generated by the radiation model
+        * Flows estimated by INSEE
+
+    Parameters
+    ----------
+    sources_territory, sinks_territory, costs_territory,
+        coordinates, raw_flowDT
+        all of them are pandas dataframes defined in the get_data function
+    alpha : float, optional
+        The default is 0.
+    beta : float, optional
+        The default is 1.
+    subset:
+        List of communal codes.
+        Flows originating from these communes will be plotted in a separate figure
+        Default is None
+
+    Returns
+    -------
+    flowsRM : pandas dataframe
+        Flows between communes produced by the radiation model.
+    flowDT : pandas dataframe
+        Flows between communes estimated by INSEE.
+    coordinates : pandas dataframe
+        Coordinates of the communes.
+    plot_sources : pandas dataframe
+        Modified version of the sources dataframe.
+
+    """
+
+    print(
+        "Model running with {} sources, {} sinks and {} costs".format(
+            len(sources_territory), len(sinks_territory), len(costs_territory)
+        )
+    )
+
+    # COMPUTE THE MODEL
+    (total_flows, source_rest_volume, sink_rest_volume) = rm.iter_radiation_model(
+        sources_territory,
+        sinks_territory,
+        costs_territory,
+        plot=False,
+    )
+
+    # PLOT THE SOURCES AND THE SINKS
+    plot_sources = sources_territory.rename(columns={"source_volume": "volume"})
+    rm.plot_volume(plot_sources, coordinates, n_locations=10, title="Volume d'actifs")
+
+    plot_sinks = sinks_territory.rename(columns={"sink_volume": "volume"})
+    rm.plot_volume(plot_sinks, coordinates, n_locations=10, title="Volume d'emplois")
+
+    # PLOT THE FLOWS COMPUTED BY THE MODEL
+
+    plot_flows = total_flows.reset_index()
+    plot_sources = sources_territory
+
+    rm.plot_flow(
+        plot_flows,
+        coordinates,
+        sources=None,
+        n_flows=500,
+        n_locations=20,
+        size=10,
+        title=(
+            "(1) Flux domicile-travail générés par le modèle"
+        ),
+    )
+
+    # PLOT SUBSET FLOWS
+
+    if subset is not None:
+        print("Visualisation for the chosen subset")
+        mask = plot_flows["from"].apply(lambda x: x in subset)
+        plot_subset_flows = plot_flows.loc[mask]
+        rm.plot_flow(
+            plot_subset_flows,
+            coordinates,
+            sources=None,
+            n_flows=500,
+            n_locations=len(subset)//5,
+            size=10,
+            title=(
+                "(1) Flux domicile-travail générés par le modèle dans l'échantillon")
         )
 
     # PLOT THE FLOWS FROM THE INSEE DATA
